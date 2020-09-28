@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: lib/src/main/baseConnector.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: lib/src/main/baseConnector.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/**
+ @module baseConnector
+*/
+import constants from './constants.js';
+import { EventEmitter } from './eventEmitter.js';
+
+let channelPort;
+let connectorReady = false;
+let vendorConnector;
+const telephonyEventEmitter = new EventEmitter(new Set(Object.keys(constants.EVENT_TYPE)));
+const crossWindowTelephonyEventTypes = Object.values(constants.EVENT_TYPE);
+
+function propagateTelephonyEvent(telephonyEventType, telephonyEventPayload) {
+    channelPort.postMessage({
+        type: constants.MESSAGE_TYPE.TELEPHONY_EVENT_DISPATCHED,
+        payload: { telephonyEventType, telephonyEventPayload }
+    });
+}
+
+crossWindowTelephonyEventTypes.forEach((eventType) => {
+    telephonyEventEmitter.on(eventType, propagateTelephonyEvent.bind(null, eventType));
+});
+
+function channelMessageHandler(message) {
+    switch (message.data.type) {
+        case constants.MESSAGE_TYPE.ACCEPT_CALL:
+            vendorConnector().acceptCall(message.data.call);
+            break;
+        case constants.MESSAGE_TYPE.DECLINE_CALL:
+            vendorConnector().declineCall(message.data.call);
+            break;
+        case constants.MESSAGE_TYPE.END_CALL:
+            vendorConnector().endCall(message.data.call, message.data.agentStatus);
+            break;
+        case constants.MESSAGE_TYPE.MUTE:
+            vendorConnector().mute();
+            break;
+        case constants.MESSAGE_TYPE.UNMUTE:
+            vendorConnector().unmute();
+            break;
+        case constants.MESSAGE_TYPE.HOLD:
+            vendorConnector().hold(message.data.call || message.data.participant);
+            break;
+        case constants.MESSAGE_TYPE.RESUME:
+            vendorConnector().resume(message.data.call || message.data.participant);
+            break;
+        case constants.MESSAGE_TYPE.SET_AGENT_STATUS:
+            vendorConnector().setAgentStatus(message.data.agentStatus);
+            break;
+        case constants.MESSAGE_TYPE.DIAL:
+            vendorConnector().dial(message.data.callee); //TODO: rename to contact
+            break;
+        case constants.MESSAGE_TYPE.SEND_DIGITS:
+            vendorConnector().sendDigits(message.data.digits);
+            break;
+        case constants.MESSAGE_TYPE.GET_PHONE_CONTACTS:
+            vendorConnector().getPhoneContacts();
+            break;
+        case constants.MESSAGE_TYPE.SWAP_PARTICIPANTS:
+            vendorConnector().swapCallParticipants(message.data.calls);
+            break;
+        case constants.MESSAGE_TYPE.JOIN_PARTICIPANTS:
+            vendorConnector().joinCallParticipants(message.data.calls);
+            break;
+        case constants.MESSAGE_TYPE.TRANSFER:
+            vendorConnector().transfer(message.data.destination, message.data.call); //TODO: rename estination to contact
+            break;
+        case constants.MESSAGE_TYPE.PAUSE_RECORDING:
+            vendorConnector().pauseRecording(message.data.call);
+            break;
+        case constants.MESSAGE_TYPE.RESUME_RECORDING:
+            vendorConnector().resumeRecording(message.data.call);
+            break;
+        default:
+            break;
+            //throw new Error(`Unsupported message type: ${messageEvent.data}`);
+    }
+}
+
+
+function windowMessageHandler(message) {
+    switch (message.data.type) {
+        case constants.MESSAGE_TYPE.SETUP_CONNECTOR:
+            channelPort = message.ports[0];
+            channelPort.onmessage = channelMessageHandler;
+            vendorConnector().init(message.data.connectorConfig);
+            window.removeEventListener('message', windowMessageHandler);
+            break;
+        default:
+            break;
+            //throw new Error(`Unsupported message type: ${messageEvent.data}`);
+    }
+}
+
+/*========================== Exported Functions ==========================*/
+
+/**
+ * Initialize a vendor connector
+ * @param {function} connector Vendor connector function to initialize
+ */
+export function initializeConnector(connector) {
+    vendorConnector = connector;
+    window.addEventListener('message', windowMessageHandler);
+}
+
+/**
+ * @returns {boolean} True if the vendor connector is fully loaded inside SFDC else false
+ */
+export function isConnectorReady() {
+    return connectorReady;
+}
+
+/**
+ * @deprecated Use {@link dispatchEvent} instead
+ * @returns {EventEmitter} Event emitter object for dispatching events
+ */
+
+export function getTelephonyEventEmitter() {
+    return telephonyEventEmitter;
+}
+
+/**
+ * Dispatch a telephony integration error to Salesforce
+ * @param {string} errorType Error Type, i.e. Constants.ErrorType.MICROPHONE_NOT_SHARED
+ * @param {string} optionalError Optional (vendor specific) error message
+ */
+export function dispatchError(errorType, optionalError) {
+    if (!constants.ERROR_TYPE.hasOwnProperty(errorType)){
+        optionalError = errorType;
+        errorType = 'GENERIC_ERROR';
+    }
+
+    telephonyEventEmitter.emit(constants.EVENT_TYPE.ERROR, { message: constants.ERROR_TYPE[errorType] })
+    if (optionalError) {
+        throw new Error(optionalError);
+    }
+}
+
+/** 
+ * Dispatch a telephony event to Salesforce
+ * &lt;pre>
+ *  Examples for Event Type | Payload :
+ *  ----------------------------------------------- 
+ *  Constants.EVENT_TYPE.CALL_STARTED | {PhoneCall}
+ *  Constants.EVENT_TYPE.CALL_CONNECTED | {PhoneCall}
+ *  Constants.EVENT_TYPE.CALL_FAILED | {PhoneCall}
+ *  Constants.EVENT_TYPE.MUTE_TOGGLE | {Boolean}
+ *  Constants.EVENT_TYPE.HOLD_TOGGLE | {PhoneCall}
+ *  Constants.EVENT_TYPE.ERROR | constants.EVENT_TYPE
+ *  Constants.EVENT_TYPE.HANGUP | {PhoneCall}
+ *  Constants.EVENT_TYPE.PHONE_CONTACTS | undefined
+ *  Constants.EVENT_TYPE.TRANSFER_CALL_CONNECTED | {PhoneCall}
+ *  Constants.EVENT_TYPE.TRANSFER_CALL_CLOSED | {PhoneCall}
+ *  Constants.EVENT_TYPE.LOGIN_STARTED | undefined 
+ *  Constants.EVENT_TYPE.LOGIN_RESULT | {success: boolean, error: string}
+ *  Constants.EVENT_TYPE.RECORDING_TOGGLE | {PhoneCall}
+ * &lt;/pre>
+ * @param {String} EventType event type, i.e. Constants.EVENT_TYPE.CALL_STARTED    
+ * @param {Object} Payload event payload
+ */
+export function dispatchEvent(eventType, payload) {
+    if (!crossWindowTelephonyEventTypes.includes(eventType)){
+        throw new Error(`Unsupported event name: ${eventType}`);
+    }
+    telephonyEventEmitter.emit(eventType, payload);
+}
+
+/** 
+ * Notify Salesforce that the connector is ready
+ */
+export function setConnectorReady() {
+    connectorReady = true;
+    channelPort.postMessage({
+        type: constants.MESSAGE_TYPE.CONNECTOR_READY,
+        payload: {
+            callInProgress: vendorConnector().getCallInProgress() //TODO: rename to getActiveCalls()
+        }
+    });
+}
+
+/** 
+ * Connector Constants
+ */
+export const Constants = constants;
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Modules</h3><ul><li><a href="module-baseConnector.html">baseConnector</a></li><li><a href="module-connector.html">connector</a></li><li><a href="module-types.html">types</a></li><li><a href="module-vendor-sdk.html">vendor-sdk</a></li></ul><h3>Classes</h3><ul><li><a href="EventEmitter.html">EventEmitter</a></li><li><a href="module-connector.Connector.html">Connector</a></li><li><a href="module-types.Contact.html">Contact</a></li><li><a href="module-types.PhoneCall.html">PhoneCall</a></li><li><a href="module-types.PhoneCallAttributes.html">PhoneCallAttributes</a></li><li><a href="module-vendor-sdk.Sdk.html">Sdk</a></li><li><a href="module-vendor-sdk-Call.html">Call</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.5</a> on Mon Sep 28 2020 15:08:25 GMT-0700 (Pacific Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

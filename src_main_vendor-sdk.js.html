@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: src/main/vendor-sdk.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: src/main/vendor-sdk.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/* eslint-disable no-console */
+
+/* 
+ * Sample Telephony Vendor SDK 
+ * @author Salesforce
+ */
+
+ /** @module vendor-sdk **/
+import { EventEmitter } from './eventEmitter';
+import { Constants, PhoneCall, Contact } from 'scv-connector-base';
+const emitter = new EventEmitter(new Set([
+    "SsoLogin",
+    "CallTransfer",
+    "CallEnded",
+    "CallConnected",
+    "CallStarted",
+    "CallDialed",
+    "CallFailed",
+    "GetPhoneContacts",
+    "SendDigits",
+    "HoldToggle",
+    "MuteToggle",
+    "RecordingToggle",
+    "Error",
+    "SubsystemLogin",
+    "SubsystemLoginResult",
+    "SwapCalls",
+    "JoinCalls",
+    "SetAgentStatus"
+]));
+
+/** 
+ * Class representing a Phone Call
+ */
+class Call extends PhoneCall {
+     /**
+     * Create a Call.
+     * @param {string} callType - Outbound, Inbound or Transfer
+     * @param {Contact} contact - Contact associated with this Call
+     * @param {string} participantType - Agent, Initial_Caller, Third_Party
+     * @param {string} voiceCallId - Salesforce voiceCallId (for incoming calls)
+     * @param {string} phoneNumber - The phone number associcated with this contact
+     */
+    constructor(callType, contact, participantType, voiceCallId, phoneNumber) {
+        const state = "ringing";
+        const initialCallHasEnded = false;
+        const callAttributes = { voiceCallId, state, participantType, initialCallHasEnded };
+        const callId = Math.random().toString(36).substring(2, 15);
+        super({ callId, callType, contact, state, callAttributes, phoneNumber });
+        this.participantHoldState = {[participantType]: false};
+    }
+
+    /**
+     * end the call
+     * @param {string} reason - reason for ending the call, i.e. "Declined"
+     */
+    end(reason){
+        this.state = this.callAttributes.state = "ended";
+        this.reason = reason; // TODO: Not final, should be merged with callAttributes.stateReason 
+    }
+    /**
+     * mark the call as failed and end it
+     * @param {string} reason - reason/error for call failure
+     */
+    fail(reason){
+        this.state = this.callAttributes.state = "failed";
+        this.reason = reason; // TODO: Not final, should be merged with callAttributes.stateReason 
+    }
+    /**
+     * connect the call (i.e. when the agent is accepting the call)
+     * @param {string} participantType - Agent, Initial_Caller, Third_Party
+     */
+    connect(participantType){
+        this.callAttributes.participantType = participantType;
+        this.state = this.callAttributes.state = "connected";
+        this.callInfo = { isOnHold: false };  // TODO: Not final, should be merged with callAttributes.isOnHold
+    }
+    /**
+     * transfer the call to a new contact
+     * @param {Contact} newcontact - new Contact to transfer to
+     */
+    transfer(newContact){
+        this.state = "transferred";
+        this.contact = newContact;
+        this.participantHoldState[Constants.PARTICIPANT_TYPE.INITIAL_CALLER] = true;
+        this.participantHoldState[Constants.PARTICIPANT_TYPE.THIRD_PARTY] = false;
+    }
+    /**
+     * toggle the hold state of all participants
+     */
+    toggleParticipantHoldState() {
+        for (var participant in this.participantHoldState) {
+            this.participantHoldState[participant] = !this.participantHoldState[participant];
+        }
+    }
+}
+
+/** 
+ * Class representing a Softphone SDK
+ */
+export class Sdk {
+    /**
+     * Create a Softphone SDK instance.
+     * @param {object} state - SDK state
+     */
+    constructor(state = { 
+        isLoginRequired: true, 
+        capabilities: {
+            muteEnabled: true,
+            holdEnabled: true,
+            recordingEnabled: true
+        },
+        activeCall: null,
+        destroyedCalls: [],
+        injectedErrors: [],
+        agentStatus: "Available",
+        phoneContacts: { endpoints: [{
+            type: "phone_number",
+            name: "AgentX",
+            phoneNumber: "555-555-4444",
+            endpointARN: "contactId1"
+        },{
+            name: "AgentY",
+            endpointARN: "contactId2"
+        }]}
+    }){
+        this.state = state;
+    }   
+    
+    set activeCall(call) {
+        this.state.activeCall = call;
+    }
+
+    get activeCall() {
+        return this.state.activeCall;
+    }
+
+    /**
+     * log a message
+     */
+    log(){
+        Array.prototype.unshift.call(arguments, "[sdk]");
+        Function.apply.call(console.log, console, Array.from(arguments));
+    }
+    /** 
+        add a list of actions (1 or more) that will throw errors, i.e. injectErrors("SsoLogin", "CallTransfer")
+    */
+    injectErrors() {  
+        const actions = Array.from(arguments);
+        this.log("injectErrors for actions", actions);
+        this.state.injectedErrors = actions;
+    }
+    /** 
+        Clear the errors
+    */
+    clearErrors() {
+        this.log("clearErrors");
+        this.state.injectedErrors = [];
+    }
+    /**
+     * destroy the current active call
+     * @param {string} reason - reason
+     */
+    destroyActiveCall(reason) {
+        this.activeCall.end(reason);
+        return this.executeAsync("CallEnded", this.activeCall).then(() => {
+            this.state.destroyedCalls.push(this.activeCall);
+            this.activeCall = null;
+        });
+    }
+    /**
+     * mark the current active call as failed and destroy it
+     * @param {string} reason - reason
+     */
+    failActiveCall(reason) {
+        this.activeCall.fail(reason);
+        return this.executeAsync("CallFailed", this.activeCall).then(() => {
+            this.state.destroyedCalls.push(this.activeCall);
+            this.activeCall = null;
+        });
+    }
+    /**
+     * perform sso on a container element
+     * @param {object} ssoConfig - sso configuration
+     * @param {object} containerDiv - container div
+     */
+    ssoLogin(ssoConfig, containerDiv) { 
+        this.log("ssoLogin", ssoConfig, "_bypass_sso", window.bypass_sso || false, containerDiv);
+        return this.executeAsync("SsoLogin", ssoConfig);
+    } 
+    /**
+     * perform login to a telephony sub system
+     * @param {object} credentials - credentials
+     */
+    subsystemLogin(credentials) {
+        this.log("subsystemLogin", credentials);
+        return this.executeAsync("SubsystemLogin", credentials).then(() => {
+            this.executeAsync("SubsystemLoginResult", { success: true })
+        }).catch(error => {
+            this.executeAsync("SubsystemLoginResult", { success: false, error })
+        });
+    } 
+    /**
+     * add a listener
+     * @param {string} eventName - event name 
+     * @param {function} listener - listener
+     */
+    on(eventName, listener) {
+        this.log("register event", eventName, listener);
+        emitter.on(eventName, listener);
+    }
+    /**
+     * fire an event
+     * @param {string} eventName - event name 
+     * @param {object} payload - payload
+     */
+    emit(eventName, payload) {
+        this.log("emit event", eventName, payload);
+        emitter.emit(eventName, payload);
+    }
+    /**
+     * execute an async action and return a promise
+     * @param {string} action - action name 
+     * @param {object} payload - payload
+     * @return {promise} promise 
+     */
+    executeAsync(action, payload) {
+        // here there should be an async operation like fetch()
+        if (this.state.injectedErrors.includes(action)){
+            this.emit("Error", { reason: action });
+            this.log("executeAsync (error)", action, payload);
+            return Promise.reject(new Error(action)); 
+        } else {
+            this.emit(action, payload);
+            this.log("executeAsync (success)", action, payload);
+            return Promise.resolve(payload);
+        }
+    }
+    /**
+     * start a call
+     * @param {string} type - Outbound, Inbound or Transfer
+     * @param {string} phoneNumber - The phone number associcated with this contact
+     * @param {string} participantType - Agent, Initial_Caller, Third_Party
+     * @param {string} voiceCallId - Salesforce voiceCallId (for incoming calls)
+     */
+    startCall(type, phoneNumber, participantType, voiceCallId) {
+        this.log("startCall", type, phoneNumber, participantType, voiceCallId);
+        let contact = new Contact({ phoneNumber });
+        let emitStartVoiceCall = () => {
+            this.activeCall = new Call(type, contact, participantType, voiceCallId, phoneNumber);
+            return this.executeAsync(type === "Transfer" ? "CallTransfer": "CallStarted", this.activeCall);
+        };
+        if (voiceCallId || type === "Outbound" || type === "Transfer" ) {
+            return emitStartVoiceCall();
+        } else { //get voiceCallId from SCRT2 for Inbound
+            return fetch('/api/createVoiceCall?caller=' + phoneNumber + '&amp;type=' + type)
+                .then(response => response.json())
+                .then((data) => {
+                    voiceCallId = data.voiceCallId;
+                    return emitStartVoiceCall();
+                }).catch((err) => {
+                    return Promise.reject(err);
+                });
+        }
+    }
+    /**
+     * get client capabilities, for example if mute or recording is supported
+     * @return {object} capabilities 
+     */
+    getCapabilities() {
+        this.log("getCapabilities", this.state.capabilities);
+        return this.state.capabilities;
+    }
+    /**
+     * get the active call
+     * @return {Call} active call 
+     */
+    getCallInProgress() { //TODO(230): rename to getActiveCalls and return an array of calls (PhoneCalls or ...PhoneCall)
+        this.log("getCallInProgress", this.activeCall);
+        return this.activeCall;
+    }
+    /**
+     * accept the active call
+     * @param {Call} call 
+     */
+    connect(call) {
+        this.log("connect", call);
+        this.activeCall.connect("Initial_Caller"); 
+        return this.executeAsync("CallConnected", this.activeCall);
+    }
+    /**
+     * decline the active call
+     * @param {Call} call 
+     */
+    declineCall(call) {
+        this.log("declineCall", call);
+        return this.destroyActiveCall("Declined");
+    }
+    /**
+     * end the active call
+     * @param {Call} call - call to end
+     * @param {string} agentStatus 
+     */
+    endCall(call, agentStatus) {
+        this.log("endCall", call, agentStatus);
+        return this.destroyActiveCall("AgentHangup");
+    }
+    /**
+     * Mute
+     */
+    mute() {
+        this.log("mute");
+        return this.executeAsync("MuteToggle", true);
+    }
+    /**
+     * Unmute
+     */
+    unmute() {
+        this.log("unmute");
+        return this.executeAsync("MuteToggle", false);
+    }
+    /**
+     * hold the active call
+     * @param {Call} call 
+     */
+    hold(call) {
+        this.log("hold", call);
+        const participantType = call.participant || call;
+        this.activeCall.participantHoldState[participantType] = true;
+        return this.executeAsync("HoldToggle", { isOnHold: true, participant: participantType });
+    }
+    /**
+     * resume the active call
+     * @param {Call} call 
+     */
+    resume(call) {
+        this.log("resume", call);
+        const participantType = call.participant || call;
+        this.activeCall.participantHoldState[participantType] = false;
+        return this.executeAsync("HoldToggle", { isOnHold: false, participant: participantType });
+    }
+    /**
+     * pause recording for the active call
+     * @param {Call} call 
+     */
+    pauseRecording(call) { 
+        this.log("pauseRecording", call);
+        return this.executeAsync("RecordingToggle", { isRecordingPaused: true });
+    }
+    /**
+     * resume recording for the active call
+     * @param {Call} call 
+     */
+    resumeRecording(call) { 
+        this.log("resumeRecording", call);
+        return this.executeAsync("RecordingToggle", { isRecordingPaused: false });
+    }
+    /**
+     * Return true if a participantType is on hold
+     * @param {string} participantType - Agent, Initial_Caller, Third_Party
+     * @return true if a participantType is on hold
+     */
+    isOnHold(participant) {
+        this.log("isOnHold", participant, this.activeCall.participantHoldState[participant]);
+        return this.activeCall.participantHoldState[participant];
+    }
+    /**
+     * swap calls
+     * @param {Call[]} calls to be swapped 
+     */
+    swapCalls(calls) {
+        this.log("swapCalls", calls);
+        this.activeCall.toggleParticipantHoldState();
+        return this.executeAsync("SwapCalls", calls);
+    }
+    /**
+     * join calls
+     * @param {Call[]} calls to be joined 
+     */
+    joinCalls(calls) {
+        this.log("joinCalls", calls);
+        return this.executeAsync("JoinCalls", calls);
+    }
+    /**
+     * set agent status
+     * @param {string} agentStatus agent status, i.e. Available, Busy
+     */
+    setAgentStatus(agentStatus) {
+        this.log("setAgentStatus", agentStatus);
+        if (!agentStatus) {
+            throw new Error("Invalid Agent Status");
+        }
+        this.agentStatus = agentStatus;
+        return this.executeAsync("SetAgentStatus", { agentStatus });
+    }
+    /**
+     * send digits to the active call
+     * @param {string} digits - digits to be sent (i.e. 123#) 
+     */
+    sendDigits(digits) {
+        this.log("sendDigits", digits);
+        if (!digits) {
+            throw new Error("Invalid digits:" + digits);
+        }
+        return this.executeAsync("SendDigits", { digits });
+    }
+    /**
+     * Get Agent Phone Book Contacts
+     * @return {object} Phone Book Contacts 
+     */
+    getPhoneContacts() {
+        this.log("getPhoneContacts");
+        return this.executeAsync("GetPhoneContacts", this.state.phoneContacts);
+    }
+    /**
+     * transfer a call to a new contact
+     * @param {Contact} contact - new contact 
+     * @param {Call} call - call to be transferred
+     */
+    transfer(contact, call) {
+        this.log("transfer", contact, call);
+        this.activeCall.transfer(contact);
+        return this.executeAsync("CallTransfer", this.activeCall);
+    }
+}
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Modules</h3><ul><li><a href="module-baseConnector.html">baseConnector</a></li><li><a href="module-connector.html">connector</a></li><li><a href="module-types.html">types</a></li><li><a href="module-vendor-sdk.html">vendor-sdk</a></li></ul><h3>Classes</h3><ul><li><a href="EventEmitter.html">EventEmitter</a></li><li><a href="module-connector.Connector.html">Connector</a></li><li><a href="module-types.Contact.html">Contact</a></li><li><a href="module-types.PhoneCall.html">PhoneCall</a></li><li><a href="module-types.PhoneCallAttributes.html">PhoneCallAttributes</a></li><li><a href="module-vendor-sdk.Sdk.html">Sdk</a></li><li><a href="module-vendor-sdk-Call.html">Call</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.5</a> on Mon Sep 28 2020 15:08:25 GMT-0700 (Pacific Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

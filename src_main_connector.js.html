@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: src/main/connector.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: src/main/connector.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>/** 
+ * Salesforce Service Cloud Voice Demo Connector
+ * @author Salesforce
+ */
+
+/** @module connector **/
+import { dispatchEvent, setConnectorReady, dispatchError, Constants } from 'scv-connector-base';
+import { Sdk } from './vendor-sdk';
+/** 
+ * Class representing a Service Cloud Voice Demo Connector
+ */
+export class Connector {
+    /**
+     * Create a Connector instance.
+     * @param {object} sdk - Telephony SDK
+     */
+    constructor(state) {
+        this.sdk = new Sdk(state);
+    }
+    /**
+     * Called by SFDC when the connector is loaded. This is the place to add all the listeners to SFDC events, such as CALL_STARTED etc and to do the sso login
+     * @param {object} callCenterConfig - SFDC Contact Center Settings
+     */
+    init(callCenterConfig) {
+        this.sdk.on("CallStarted", call => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.CALL_STARTED, call);
+        });
+
+        this.sdk.on("CallConnected", call => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.CALL_CONNECTED, call);
+        });
+           
+        this.sdk.on("CallEnded", call => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.HANGUP, call);
+        });
+
+        this.sdk.on("CallFailed", call => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.CALL_FAILED, call);
+        });
+
+        this.sdk.on("Error", err => {
+            this.log("Sfdc will show Error", err);
+        });
+
+        this.sdk.on("SubsystemLoginResult", result => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.LOGIN_RESULT, result)
+        });
+
+        this.sdk.on("MuteToggle", isMuted => { //optional
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.MUTE_TOGGLE, { isMuted });
+        });
+
+        this.sdk.on("RecordingToggle", isRecordingPaused => { //optional
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.RECORDING_TOGGLE, { isRecordingPaused });
+        });
+
+        this.sdk.on("CallTransfer", call => { //optional
+            // also need to hook this up when 3rd party leaves the call: this.dispatchEventToSfdc(Constants.EVENT_TYPE.TRANSFER_CALL_CLOSED);
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.TRANSFER_CALL_CONNECTED, { 
+                initialCallHasEnded: call.callAttributes &amp;&amp; call.callAttributes.initialCallHasEnded
+            });
+        });
+
+        this.sdk.on("SsoLogin", () => {
+            this.log("setConnectorReady");
+            setConnectorReady();
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.LOGIN_STARTED); //So sfdc can load a login modal 
+        });
+
+        const containerDiv = document.getElementById('iframe');
+        this.sdk.ssoLogin(callCenterConfig, containerDiv).catch(error => {
+            this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_LOG_IN, error.message);
+        });
+    }
+    
+    /**
+     * Called when the connector is loaded, to request the active call
+     */
+    getCallInProgress() {
+        return this.sdk.getCallInProgress();
+    }
+    /**
+     * Called when call is accepted on the omni widget
+     * @param {Call} call call
+     */
+    acceptCall(call) {
+        if (this.sdk.activeCall) {
+            this.sdk.connect(call);
+        } else {
+            this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_ACCEPT_THE_CALL, "Cannot accept call: No active call");
+        }
+    }
+    /**
+     * Called when call is declined
+     * @param {Call} call call
+     */
+    declineCall(call) {
+        this.sdk.declineCall(call);
+    }
+    /**
+     * Called when agent hangs up or when a participant (customer or third party) is
+     * removed by the agent.
+     * @param {Call} call call
+     * @param {strint} agentStatus agent status
+     */
+    endCall(call, agentStatus) {
+        this.sdk.endCall(call, agentStatus);
+    }
+    /**
+     * Called when call is muted from the sfdc call controls
+     */
+    mute() {
+        this.sdk.mute().catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_MUTE_CALL);
+        })
+    }
+    /**
+     * Called when call is unmuted from the sfdc call controls
+     */
+    unmute() {
+        this.sdk.unmute().catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_UNMUTE_CALL);
+        })
+    }
+    /**
+     * Called when customer/third party call is put on hold by the agent
+     * @param {Call} call call
+     */
+    hold(call) {
+        this.sdk.hold(call).then(() => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.HOLD_TOGGLE, { 
+                isThirdPartyOnHold: this.sdk.isOnHold(Constants.PARTICIPANT_TYPE.THIRD_PARTY), 
+                isCustomerOnHold: this.sdk.isOnHold(Constants.PARTICIPANT_TYPE.INITIAL_CALLER) 
+            });
+        }).catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_HOLD_CALL);
+        }) 
+    }
+    /**
+     * Called when call is resumed (off hold for either customer/third party) from
+     * the sfdc call controls
+     * @param {Call} call call
+     */
+    resume(call) {
+        this.sdk.resume(call).then(() => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.HOLD_TOGGLE, { 
+                isThirdPartyOnHold: this.sdk.isOnHold(Constants.PARTICIPANT_TYPE.THIRD_PARTY), 
+                isCustomerOnHold: this.sdk.isOnHold(Constants.PARTICIPANT_TYPE.INITIAL_CALLER) 
+            });
+        }).catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_RESUME_CALL);
+        }) 
+    }
+    /**
+     * Called when recording is paused from the sfdc call controls
+     * @param {Call} call call
+     */
+    pauseRecording(call) {
+        this.sdk.pauseRecording(call).catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_PAUSE_RECORDING);
+        })
+    }
+    /**
+     * Called when recording is resumed from the sfdc call controls
+     * @param {Call} call call
+     */
+    resumeRecording(call) {
+        this.sdk.resumeRecording(call).catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_RESUME_RECORDING);
+        })
+    }
+    /**
+     * Called when swap is clicked on a transfer call
+     * @param {Call[]} calls calls
+     */
+    swapCallParticipants(calls) {
+        this.sdk.swapCalls(calls).then(() => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.HOLD_TOGGLE, { 
+                isThirdPartyOnHold: this.sdk.isOnHold(Constants.PARTICIPANT_TYPE.THIRD_PARTY), 
+                isCustomerOnHold: this.sdk.isOnHold(Constants.PARTICIPANT_TYPE.INITIAL_CALLER) 
+            });
+        }).catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_SWAP_PARTICIPANTS);
+        })
+    }
+    /**
+     * Called when join is clicked on a transfer call
+     * @param {Call[]} calls calls
+     */
+    joinCallParticipants(calls) {
+        this.sdk.joinCalls(calls).then(() => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.HOLD_TOGGLE, { 
+                isThirdPartyOnHold: false, 
+                isCustomerOnHold: false 
+            });
+        }).catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_JOIN_PARTICIPANTS);
+        })
+    }
+    /**
+     * Called when agent sets their status/presence (i.e. when changing from
+     * Available to Offline) 
+     * @param agentStatus A string that represents a valid vendor agent status.
+     */
+    setAgentStatus(agentStatus) {
+        this.sdk.setAgentStatus(agentStatus).catch(() => {
+           this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_SET_AGENT_STATUS); //TODO: this needs to be added to telephonyConnector
+        }) 
+    }
+    /**
+     * Called when an outbound call is made 
+     * @param {Contact} contact who is called by the caller.
+     */
+    dial(contact) {
+        this.sdk.startCall(Constants.CALL_TYPE.OUTBOUND, contact.phoneNumber, Constants.PARTICIPANT_TYPE.INITIAL_CALLER)
+        .catch(() => {
+            this.sdk.failActiveCall();
+            this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_START_THE_CALL);
+        }) 
+    }
+    /**
+     * Called when an agent sends digits on the existing call @digits: a string of
+     * digits to send to the existing connected call.
+     * @param {string} digits digits
+     */
+    sendDigits(digits) {
+        this.sdk.sendDigits(digits);
+    }
+    /**
+     * Called when speed dial is clicled in order to request the vendor to get the agent phone contacts
+     */
+    getPhoneContacts() {
+        this.sdk.getPhoneContacts().then(phoneContacts => {
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.PHONE_CONTACTS, phoneContacts);
+        }).catch(error => {
+            this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_GET_PHONE_CONTACTS, error);
+        }) 
+        
+    }
+    /**
+     * Transfer the call to either an address or a free form Phone Number.
+     * @param {Contact} contact contact
+     * @param {Call} call call
+     */
+    transfer(contact, call) {
+        this.sdk.transfer(contact, call).catch(error => {
+            this.dispatchErrorToSfdc(Constants.ERROR_TYPE.CAN_NOT_ADD_PARTICIPANT, error);
+            this.dispatchEventToSfdc(Constants.EVENT_TYPE.TRANSFER_CALL_CLOSED);
+        }) 
+    }
+    /**
+     * Log a message
+     */
+    log(){
+        Array.prototype.unshift.call(arguments, "[connector]");
+        /* eslint-disable no-console */
+        Function.apply.call(console.log, console, Array.from(arguments));
+    }
+    /**
+     * Dispatch an event to SFDC.
+     * @param {string} eventType Event Type
+     * @param {object} payload Payload
+     */
+    dispatchEventToSfdc(eventType, payload) {
+        this.log("dispatching event to sfdc", eventType, payload);
+        dispatchEvent(eventType, payload);
+    }
+
+    /**
+     * Dispatch an error to SFDC.
+     * @param {string} errorType error type
+     * @param {string} optionalErrorMessage Optional Error Message
+     */
+    dispatchErrorToSfdc(errorType, optionalErrorMessage) {
+        this.log("dispatching error to sfdc", errorType, optionalErrorMessage);
+        dispatchError(errorType, optionalErrorMessage);
+    }
+}
+
+
+</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Modules</h3><ul><li><a href="module-baseConnector.html">baseConnector</a></li><li><a href="module-connector.html">connector</a></li><li><a href="module-types.html">types</a></li><li><a href="module-vendor-sdk.html">vendor-sdk</a></li></ul><h3>Classes</h3><ul><li><a href="EventEmitter.html">EventEmitter</a></li><li><a href="module-connector.Connector.html">Connector</a></li><li><a href="module-types.Contact.html">Contact</a></li><li><a href="module-types.PhoneCall.html">PhoneCall</a></li><li><a href="module-types.PhoneCallAttributes.html">PhoneCallAttributes</a></li><li><a href="module-vendor-sdk.Sdk.html">Sdk</a></li><li><a href="module-vendor-sdk-Call.html">Call</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.5</a> on Mon Sep 28 2020 15:08:25 GMT-0700 (Pacific Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>

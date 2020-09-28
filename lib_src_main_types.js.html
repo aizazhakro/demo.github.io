@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>JSDoc: Source: lib/src/main/types.js</title>
+
+    <script src="scripts/prettify/prettify.js"> </script>
+    <script src="scripts/prettify/lang-css.js"> </script>
+    <!--[if lt IE 9]>
+      <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <link type="text/css" rel="stylesheet" href="styles/prettify-tomorrow.css">
+    <link type="text/css" rel="stylesheet" href="styles/jsdoc-default.css">
+</head>
+
+<body>
+
+<div id="main">
+
+    <h1 class="page-title">Source: lib/src/main/types.js</h1>
+
+    
+
+
+
+    
+    <section>
+        <article>
+            <pre class="prettyprint source linenums"><code>import constants from './constants.js';
+
+/**
+ @module types
+*/
+
+/** 
+ * Class representing a Contact. This object is used to represent 
+ * phone system contact or any call target
+ */
+
+export class Contact {
+    /**
+     * Create a Contact.
+     * @param {string} id - The unique contactId
+     * @param {string} type - The type of the contact, one of the CONTACT_TYPE values
+     * @param {string} label - The label for this contact to be displayed in the UI
+     * @param {string} phoneNumber - The phone number associcated with this contact
+     * @param {string} prefix - Any prefix to be dialed before dialing the number (i.e. +1)
+     * @param {string} extension - Any extension to be dialed after dialing the number
+     * 
+     */
+    constructor({phoneNumber, id, type, label, prefix, extension}) {
+        if (phoneNumber) {
+            Validator.validateString(phoneNumber);
+        }
+        if (type) {
+            Validator.validateEnum(type, Object.values(constants.CONTACT_TYPE));
+        }
+        if (id) {
+            Validator.validateString(id);
+        }
+        if (label) {
+            Validator.validateString(label);
+        }
+        if (prefix) {
+            Validator.validateString(prefix);
+        }
+        if (extension) {
+            Validator.validateString(extension);
+        }
+
+        this.phoneNumber = phoneNumber;
+        this.id = id;
+        this.type = type;
+        this.label = label;
+        this.prefix = prefix;
+        this.extension = extension;
+    }
+}
+
+/** 
+* Class representing PhoneCallAttributes
+*/
+
+ export class PhoneCallAttributes {
+    constructor({ voiceCallId, hangupReason, participantType, parentId, isOnHold }) {
+        if (voiceCallId) {
+            Validator.validateString(voiceCallId);
+        }
+        if (hangupReason) {
+            Validator.validateString(hangupReason);
+        }
+        if (participantType) {
+            Validator.validateEnum(participantType, Object.values(constants.PARTICIPANT_TYPE));
+        }
+        if (parentId) {
+            Validator.validateString(parentId);
+        }
+        if (isOnHold !== undefined) {
+            Validator.validateBoolean(isOnHold);
+        }
+
+        this.voiceCallId = voiceCallId;
+        this.hangupReason = hangupReason;
+        this.participantType = participantType;
+        this.parentId = parentId;
+        this.isOnHold = isOnHold;
+    }
+ }
+
+/** 
+* Class representing a PhoneCall. 
+*/
+
+export class PhoneCall {
+    /**
+     * Create a PhoneCall.
+     * @param {string} callId - The unique callId. This is a required parameter
+     * @param {string} callType - The type of the call, one of the CALL_TYPE values
+     * @param {Contact} contact - The Call Target / Contact 
+     * @param {string} state - The state of the call, i.e. ringing, connected, declined, failed 
+     * @param {PhoneCallAttributes} callAttributes - Any additional call attributes
+     * @param {string} phoneNumber - The phone number associated with this call (usually external number) //TODO: remove in 230 and read it from Contact 
+     */
+    constructor({callId, callType, contact, state, callAttributes, phoneNumber}) {
+        Validator.validateString(callId)
+            .validateEnum(callType ? 
+                callType.charAt(0).toUpperCase() + callType.slice(1) :
+                callType, Object.values(constants.CALL_TYPE))
+            .validateString(state)
+            .validateObject(callAttributes)
+            .validateString(phoneNumber);
+        this.callId = callId;
+        this.callType = callType;
+        this.contact = contact;
+        this.state = state;
+        this.callAttributes = callAttributes;
+        this.phoneNumber = phoneNumber;
+    }
+}
+
+
+class Validator {
+    static validateString(value) {
+        if (typeof value !== 'string') {
+            throw new Error(`Invalid argument. Expecting a string but got ${typeof value}`);
+        }
+        return this;
+    }
+
+    static validateBoolean(value) {
+        if (typeof value !== 'boolean') {
+            throw new Error(`Invalid argument. Expecting a boolean but got ${typeof value}`);
+        }
+        return this;
+    }
+
+    static validateObject(value) {
+        if (typeof value !== 'object') {
+            throw new Error(`Invalid argument. Expecting an object but got ${typeof value}`);
+        }
+        return this;
+    }
+
+    static validateEnum(value, enumValues) {
+        if (!enumValues.includes(value)) {
+            throw new Error(`Invalid argument. Expecting a value from ${JSON.stringify(enumValues)} but got ${value}`);
+        }
+        return this;
+    }
+}</code></pre>
+        </article>
+    </section>
+
+
+
+
+</div>
+
+<nav>
+    <h2><a href="index.html">Home</a></h2><h3>Modules</h3><ul><li><a href="module-baseConnector.html">baseConnector</a></li><li><a href="module-connector.html">connector</a></li><li><a href="module-types.html">types</a></li><li><a href="module-vendor-sdk.html">vendor-sdk</a></li></ul><h3>Classes</h3><ul><li><a href="EventEmitter.html">EventEmitter</a></li><li><a href="module-connector.Connector.html">Connector</a></li><li><a href="module-types.Contact.html">Contact</a></li><li><a href="module-types.PhoneCall.html">PhoneCall</a></li><li><a href="module-types.PhoneCallAttributes.html">PhoneCallAttributes</a></li><li><a href="module-vendor-sdk.Sdk.html">Sdk</a></li><li><a href="module-vendor-sdk-Call.html">Call</a></li></ul>
+</nav>
+
+<br class="clear">
+
+<footer>
+    Documentation generated by <a href="https://github.com/jsdoc/jsdoc">JSDoc 3.6.5</a> on Mon Sep 28 2020 15:08:25 GMT-0700 (Pacific Daylight Time)
+</footer>
+
+<script> prettyPrint(); </script>
+<script src="scripts/linenumber.js"> </script>
+</body>
+</html>
